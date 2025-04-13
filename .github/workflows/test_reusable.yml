@@ -148,8 +148,7 @@ jobs:
     name: "Run Terraform Apply via Reusable"
     needs: check-if-apply-needed
     if: (needs.check-if-apply-needed.outputs.should_apply || 'false') == 'true'
-    uses: wexinc/ps-ds-peng-tools/.github/workflows/reusable-terraform.yml@reusable-terraform/1.9.0
-    env:
+    uses: Muhammad-Awab/automation-tf/.github/workflows/reusable_workflow.yml@main
       ENVIRONMENT_NAME: ${{ needs.check-if-apply-needed.outputs.env_name }}
       REGION: us-west-2
       BUCKET: ${{ needs.check-if-apply-needed.outputs.bucket_name }}
