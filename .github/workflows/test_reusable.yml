@@ -1,32 +1,189 @@
-name: Test Reusable Workflow
+# WORKFLOW CONFIGURATIONS
+
+# Module - snowflake/snowflake_pantomath
+
+# Branches - dev applies to dev, main applies to stg and prod
+
+# Schedule - 9 AM CT on Mon, Tue, Thu only
+
+# Skip Conditions - No applies on Wed/Fri; no apply if no new resources
+
+# Plan and Apply Logic - only apply if new resources exist. Only apply to stg/prod if dev had a successful apply on the same commit ## CHECK REUSABLE TEMPLATES ##
+
+# Apply Tracking - Compare SHA to determine the apply ## GREATEST CHALLENGE OF THE WORKFLOW. CAPURING LAST APPLY, SHA STORAGE, AND COMPARISON ##
+
+# Reusable Workflow - Will be making use of reusable-terraform.yml ## REVIEW AND ADD CUSTOM LOGIC AROUND IT OR USE ACTIONS IN THE JOB ##
+
+# Notifications - Sent to Google Chat on success and failure — only if apply runs ## CHECK REUSABLE TEMPLATES ##
+
+# Runners - Using Self-hosted runners  ## CONFIRM RUNNERS ##
+
+
+# ************************************************************************************
+
+#CURRENT STATE OF THE WORKFLOW
+
+# My first commit was generic for a pr review to understand our configurations. Reviewing reusable workflow for adjustments - https://github.com/wexinc/ps-ds-peng-tools/blob/reusable-bot/1.7.0/.github/workflows/reusable-terraform.ymlConnect your Github account 
+
+# We have 2 options: Either make use of actions from  reusable workflow or add logic around the reusable workflow.
+
+# Making use of actions in the reusable workflow seem ideal but would add the complexity of the configuration since we are doing a  conditional apply based on SHA comparison, on schedule which has more custom logic than the reusable workflow.
+
+# Building a hybrid workflow that wraps our existing reusable-terraform.yml and add the pre-check logic for SHA diff to skip unnecessary applies and post-apply logic  to store successful SHA make the configuration cleaner and less complex.
+
+# *************************************************************************************
+
+## This workflow is a hybrid of the reusable workflow and custom logic to check for changes in the pantomath module before applying Terraform changes. It also includes a step to store the last successful SHA in S3 for tracking purposes.
+
+#****************************************
+                 # TRIGGERS
+#*****************************************
+
+name: "[AUTO] Add Grants To Pantomath"
+
 on:
   workflow_dispatch:
-    inputs:
-      module:
-        description: "Module to test"
-        required: true
-        type: string
-      environment:
-        description: "Environment (DEV/TEST/PROD)"
-        required: true
-        type: string
-        default: "DEV"
+
+  schedule:
+    - cron: '0 14 * * 1,2,4'  # 9 AM Central Time on Mon/Tue/Thu
+
+  push:
+    branches:
+      - dev
+      - main
+    paths:
+      - 'snowflake/snowflake_pantomath/**'
+
+#****************************************
+     # CHECK IF APPLY NEEDED            
+#*****************************************
 
 jobs:
-  call-reusable:
-    uses: ./.github/workflows/reusable_workflow.yml
-    permissions:  # Add this block to grant permissions
-      id-token: write  # Required for OIDC token generation
-      contents: read   # Required for checkout
+  check-if-apply-needed:
+    name: "Check if Apply is Needed"
+    runs-on: dev-us-west-2
+    outputs:
+      should_apply: ${{ steps.check.outputs.should_apply }}
+      env_name: ${{ steps.derive.outputs.env_name }}
+      bucket_name: ${{ steps.derive.outputs.bucket_name }}
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v3
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+
+      - name: Derive environment and bucket name
+        id: derive
+        run: |
+          if [ "${{ github.ref_name }}" = "main" ]; then
+            echo "ENVIRONMENT_NAME=stg" >> $GITHUB_ENV
+            echo "BUCKET=gha-logs-dataplatform-stg-us-west-2" >> $GITHUB_ENV
+            echo "env_name=stg" >> $GITHUB_OUTPUT
+            echo "bucket_name=gha-logs-dataplatform-stg-us-west-2" >> $GITHUB_OUTPUT
+          else
+            echo "ENVIRONMENT_NAME=dev" >> $GITHUB_ENV
+            echo "BUCKET=gha-logs-dataplatform-dev-us-west-2" >> $GITHUB_ENV
+            echo "env_name=dev" >> $GITHUB_OUTPUT
+            echo "bucket_name=gha-logs-dataplatform-dev-us-west-2" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Load last successful SHA
+        id: load
+        run: |
+          set -e
+          echo "Checking for last successful SHA in s3://$BUCKET/last_successful_sha"
+
+          if ! aws sts get-caller-identity > /dev/null 2>&1; then
+            echo "ERROR: AWS CLI is not configured or credentials are missing." >&2
+            exit 1
+          fi
+
+          if aws s3api head-object --bucket "$BUCKET" --key "last_successful_sha" > /dev/null 2>&1; then
+            if aws s3 cp "s3://$BUCKET/last_successful_sha" last_sha.txt; then
+              LAST_SHA=$(cat last_sha.txt)
+              if [[ "$LAST_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+                echo "Valid SHA loaded: $LAST_SHA"
+                echo "LAST_SHA=$LAST_SHA" >> $GITHUB_ENV
+              else
+                echo "Invalid SHA format. Fallback."
+                echo "LAST_SHA=none" >> $GITHUB_ENV
+              fi
+            else
+              echo "ERROR: Failed to download SHA file." >&2
+              exit 1
+            fi
+          else
+            echo "No previous SHA found."
+            # Fallback for first run or missing SHA file
+            echo "LAST_SHA=none" >> $GITHUB_ENV
+          fi
+
+      - name: Compare SHAs for changes
+        id: check
+        run: |
+          CURRENT_SHA="${{ github.sha }}"
+          echo "CURRENT_SHA=$CURRENT_SHA"
+          echo "LAST_SHA=$LAST_SHA"
+
+          if [ "$LAST_SHA" = "none" ]; then
+            echo "First run or no previous SHA. Proceeding."
+            echo "should_apply=true" >> $GITHUB_OUTPUT
+          else
+            CHANGES=$(git diff --name-only "$LAST_SHA" "$CURRENT_SHA" -- "snowflake/snowflake_pantomath/")
+            if [ -n "$CHANGES" ]; then
+              echo "Changes detected."
+              echo "should_apply=true" >> $GITHUB_OUTPUT
+            else
+              echo "No changes detected."
+              echo "should_apply=false" >> $GITHUB_OUTPUT
+            fi
+          fi
+
+#****************************************
+     # RUN THE APPLY IF NEEDED            
+#*****************************************
+
+  terraform-apply:
+    name: "Run Terraform Apply via Reusable"
+    needs: check-if-apply-needed
+    if: (needs.check-if-apply-needed.outputs.should_apply || 'false') == 'true'
+    uses: wexinc/ps-ds-peng-tools/.github/workflows/reusable-terraform.yml@reusable-terraform/1.9.0
+    env:
+      ENVIRONMENT_NAME: ${{ needs.check-if-apply-needed.outputs.env_name }}
+      REGION: us-west-2
+      BUCKET: ${{ needs.check-if-apply-needed.outputs.bucket_name }}
     with:
-      module: ${{ inputs.module }}
-      environment: ${{ inputs.environment }}
-      region: "us-west-2"
-      command: "plan"
+      module: snowflake/snowflake_pantomath
+      region: ${{ env.REGION }}
+      command: apply
+      environment: ${{ env.ENVIRONMENT_NAME }}
       target: ""
       refresh: true
       disconnected: false
       is_pull_request: false
-      bucket: "your-log-bucket-name"
-      project_type: "corporate"
-    secrets: inherit
+      bucket: ${{ env.BUCKET }}
+      project_type: corporate
+    secrets:
+      GHT: ${{ secrets.GHT }}
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+
+#****************************************
+#      POST-APPLY LOGIC            
+#*****************************************
+
+  post-apply:
+    name: "Store SHA After Apply"
+    runs-on: dev-us-west-2
+    needs: terraform-apply
+    if: needs.terraform-apply.result == 'success'
+    steps:
+      - name: Upload last successful SHA to S3
+        run: |
+          echo "${{ github.sha }}" > last_sha.txt
+          aws s3 cp last_sha.txt s3://${{ needs.check-if-apply-needed.outputs.bucket_name }}/last_successful_sha
+
+#************************************************************************************************
+
+
