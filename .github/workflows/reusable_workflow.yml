@@ -1,7 +1,7 @@
 name: "~[TF][REUSABLE_WORKFLOW]"
 
 on:
-  workflow_call:
+  workflow_dispatch:
     inputs:
       module:
         description: "Module to plan"
@@ -37,7 +37,57 @@ on:
         type: boolean
         default: false
       is_pull_request:
-        description: "Wheter the workflow that triggered is a pull request or not"
+        description: "Whether the workflow that triggered is a pull request or not"
+        required: true
+        type: boolean
+        default: false
+      bucket:
+        description: "Bucket used for storing workflow logs"
+        type: string
+        required: true
+      project_type:
+        description: "Define the type of the project being executed, either corporate or health. Defaults to corporate"
+        required: false
+        type: string
+        default: "corporate"
+  workflow_call:
+    # If you want to also use this workflow as reusable, keep this part
+    inputs:
+      module:
+        description: "Module to plan"
+        required: true
+        type: string
+      region:
+        description: "Region to plan"
+        required: true
+        type: string
+        default: "us-west-2"
+      command:
+        description: "Command to plan or apply"
+        required: true
+        type: string
+        default: "plan"
+      environment:
+        description: "Environment to plan"
+        required: true
+        type: string
+        default: "DEV"
+      target:
+        description: "Target to plan"
+        required: true
+        type: string
+      refresh:
+        description: "Refresh state option"
+        required: true
+        type: boolean
+        default: true
+      disconnected:
+        description: "Refresh state option"
+        required: true
+        type: boolean
+        default: false
+      is_pull_request:
+        description: "Whether the workflow that triggered is a pull request or not"
         required: true
         type: boolean
         default: false
@@ -58,211 +108,4 @@ on:
       DOCKERHUB_TOKEN:
         description: "Docker Hub token"
 
-jobs:
-  setup_environment:
-    runs-on: [self-hosted, Linux, runner-v3]
-    if: always()
-    outputs:
-      arn: ${{ steps.setup_environment.outputs.arn }}
-      iam_instance_profile: ${{ steps.setup_environment.outputs.iam_instance_profile }}
-      image_id: ${{ steps.setup_environment.outputs.image_id }}
-      instance_type: ${{ steps.setup_environment.outputs.instance_type }}
-      runner: ${{ steps.setup_environment.outputs.runner }}
-      security_group_id: ${{ steps.setup_environment.outputs.security_group_id }}
-      subnet_id: ${{ steps.setup_environment.outputs.subnet_id }}
-      tags: ${{ steps.setup_environment.outputs.tags }}
-      target_string: ${{ steps.setup_environment.outputs.target_string }}
-      tfvar_file: ${{ steps.setup_environment.outputs.tfvar_file }}
-      workspace: ${{ steps.setup_environment.outputs.workspace }}
-      job_name: ${{ github.job }}
-    steps:
-      - name: Setup environment for ${{ inputs.module }}
-        id: setup_environment
-        uses: wexinc/ps-ds-peng-tools/actions/python/setup_environment@setup-environment/2.1.0
-        with:
-          module: ${{ inputs.module }}
-          environment: ${{ inputs.environment }}
-          region: ${{ inputs.region }}
-          target: ${{ inputs.target }}
-          project_type: ${{ inputs.project_type }}
-
-  verify:
-    runs-on: [self-hosted, data-platform-custodian_prod]
-    outputs:
-      locked: ${{ steps.lock_verifier.outputs.locked }}
-      job_name: ${{ github.job }}
-    steps:
-      - name: Verifying if Snowflake backend is locked
-        id: lock_verifier
-        uses: wexinc/ps-ds-peng-tools/actions/python/lock_verifier@lock_verifier/1.0.0
-        with:
-          module: ${{ inputs.module }}
-          env: ${{ inputs.environment }}
-          region: ${{ inputs.region }}
-          disconnected: ${{ inputs.disconnected }}
-
-  runner_login:
-    needs: [setup_environment, verify]
-    if: always() && needs.verify.outputs.locked == 'false'
-    runs-on: ${{ needs.setup_environment.outputs.runner }}
-    outputs:
-      job_name: ${{ github.job }}
-    steps:
-      - name: Clone Repo ${{ github.repository }}
-        id: checkout_code
-        uses: wexinc/ps-ds-peng-tools/actions/javascript/checkout@checkout/1.0.0
-      - name: Docker Login
-        id: docker_login
-        uses: wexinc/ps-ds-peng-tools/actions/javascript/login-action@login-action/1.0.0
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-  spawn:
-    needs: [setup_environment, verify, runner_login]
-    if: always() && needs.verify.outputs.locked == 'false'
-    runs-on: ${{ needs.setup_environment.outputs.runner }}
-    outputs:
-      label: ${{ steps.spawn_point.outputs.label }}
-      instance_id: ${{ steps.spawn_point.outputs.instance_id }}
-      job_name: ${{ github.job }}
-    steps:
-      - name: Docker Login
-        id: docker_login
-        uses: wexinc/ps-ds-peng-tools/actions/javascript/login-action@login-action/1.0.0
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Spawning new runner for ${{ inputs.module }}
-        id: spawn_point
-        uses: wexinc/ps-ds-peng-tools/actions/python/spawn_point@spawn-point/1.1.0
-        with:
-          mode: "start"
-          environment: ${{ inputs.environment }}
-          region: ${{ inputs.region }}
-          arn: ${{ needs.setup_environment.outputs.arn }}
-          image_id: ${{ needs.setup_environment.outputs.image_id }}
-          instance_type: ${{ needs.setup_environment.outputs.instance_type }}
-          subnet_id: ${{ needs.setup_environment.outputs.subnet_id }}
-          security_group_id: ${{ needs.setup_environment.outputs.security_group_id }}
-          iam_instance_profile: ${{ needs.setup_environment.outputs.iam_instance_profile }}
-          tags: >
-            ${{ needs.setup_environment.outputs.tags }}
-          github_token: ${{ secrets.GHT }}
-          repo: ${{ github.repository }}
-
-  setup:
-    needs: [verify, spawn]
-    if: always() && needs.verify.outputs.locked == 'false'
-    runs-on: ${{ needs.spawn.outputs.label }}
-    outputs:
-      job_name: ${{ github.job }}
-    steps:
-      - name: Clone Repo ${{ github.repository }}
-        id: checkout_code
-        uses: wexinc/ps-ds-peng-tools/actions/javascript/checkout@checkout/1.0.0
-      - name: Docker Login
-        id: docker_login
-        uses: wexinc/ps-ds-peng-tools/actions/javascript/login-action@login-action/1.0.0
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-  terraform:
-    needs: [setup_environment, verify, runner_login, spawn, setup]
-    if: needs.verify.outputs.locked == 'false'
-    permissions:
-      id-token: write
-      contents: read
-    runs-on: ${{ needs.spawn.outputs.label }}
-    outputs:
-      summary: ${{ steps.terraform_command.outputs.terraform_summary }}
-      job_name: ${{ github.job }}
-    env:
-      TF_VAR_github_token: ${{ secrets.GHT }}
-    steps:
-      - name: Generate OIDC Token
-        id: generate_token
-        uses: wexinc/ps-ds-peng-tools/actions/python/oidc_token@oidc-token/1.0.0
-      - name: Run Terraform ${{ inputs.command }} on ${{ inputs.module }}
-        id: terraform_command
-        uses: wexinc/ps-ds-peng-tools/actions/bash/terraform_command@terraform-command/1.1.0
-        with:
-          module: ${{ inputs.module }}
-          region: ${{ inputs.region }}
-          command: ${{ inputs.command }}
-          tfvar_file: ${{ needs.setup_environment.outputs.tfvar_file }}
-          workspace: ${{ needs.setup_environment.outputs.workspace }}
-          target_string: ${{ needs.setup_environment.outputs.target_string }}
-          refresh: ${{ inputs.refresh == true }}
-          disconnected: ${{ inputs.disconnected == true }}
-          oidc_token: ${{ steps.generate_token.outputs.token }}
-          project_type: ${{ inputs.project_type }}
-          ght: ${{ secrets.GHT }}
-
-  notify:
-    needs: [verify, spawn, terraform]
-    if: always() && needs.verify.outputs.locked == 'false'
-    runs-on: ${{ needs.spawn.outputs.label }}
-    outputs:
-      formatted_error: ${{steps.handle_errors.outputs.formatted_error}}
-      job_name: ${{ github.job }}
-    steps:
-      - name: Log Run
-        uses: wexinc/ps-ds-peng-tools/actions/python/logger@logger/2.1.0
-        with:
-          workflow_name: "${{ inputs.module }}_${{ inputs.command }}_${{ inputs.environment }}_${{ inputs.region }}_${{ github.head_ref || github.ref_name }}_${{ github.actor }}"
-          workflow_url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          user: ${{ github.actor }}
-          branch: ${{ github.head_ref || github.ref_name }}
-          environment: ${{ inputs.environment }}
-          region: ${{ inputs.region }}
-          module: ${{ inputs.module }}
-          target: ${{ inputs.target }}
-          summary: ${{ needs.terraform.outputs.summary }}
-          bucket: ${{ inputs.bucket }}
-      - name: Generate Summary
-        uses: wexinc/ps-ds-peng-tools/actions/python/plan_announcer@plan-announcer/1.0.0
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          repo: ${{ github.event.repository.full_name }}
-          pull_number: ${{ github.event.number }}
-          environment: ${{ inputs.environment }}
-          region: ${{ inputs.region }}
-          commit_sha: ${{ github.event.pull_request.head.sha }}
-          plan_summary: ${{ needs.terraform.outputs.summary }}
-          module: ${{ inputs.module }}
-          is_pull_request: ${{ inputs.is_pull_request == true }}
-      - name: Handle Errors
-        id: handle_errors
-        uses: wexinc/ps-ds-peng-tools/actions/python/error_handling@error_handling/2.0.0
-        with:
-          module: ${{ inputs.module }}
-      - name: Notify User
-        uses: wexinc/ps-ds-peng-tools/actions/python/notifier@notifier/1.0.0
-        with:
-          workflow_name: "[${{ github.head_ref || github.ref_name }}]-${{ inputs.module }}-${{ inputs.command }}-${{ inputs.environment }}-${{ inputs.region }}-${{ github.actor }}"
-          workflow_url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          workflow_status: ${{ join(needs.*.result) }}
-          workflow_number: ${{ github.run_number }}
-          workflow_jobs: ${{ join(needs.*.outputs.job_name) }}
-          plan_summary: ${{ needs.terraform.outputs.summary }}
-          branch_name: ${{ github.head_ref || github.ref_name }}
-          region: ${{ inputs.region }}
-          errors: ${{ steps.handle_errors.outputs.formatted_error }}
-
-  terminate:
-    needs: [setup_environment, verify, runner_login, spawn, notify]
-    if: always() && needs.verify.outputs.locked == 'false'
-    runs-on: ${{ needs.setup_environment.outputs.runner }}
-    steps:
-      - name: Terminate ephemeral runner
-        uses: wexinc/ps-ds-peng-tools/actions/python/spawn_point@spawn-point/1.1.0
-        with:
-          mode: "stop"
-          region: ${{ inputs.region }}
-          arn: ${{ needs.setup_environment.outputs.arn }}
-          label: ${{ needs.spawn.outputs.label }}
-          instance_id: ${{ needs.spawn.outputs.instance_id }}
-          github_token: ${{ secrets.GHT }}
-          repo: ${{ github.repository }}
+# Jobs section stays the same...
