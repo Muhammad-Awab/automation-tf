@@ -1,42 +1,32 @@
+# ************************************************************************************
 # WORKFLOW CONFIGURATIONS
 
 # Module - snowflake/snowflake_pantomath
-
 # Branches - dev applies to dev, main applies to stg and prod
-
 # Schedule - 9 AM CT on Mon, Tue, Thu only
-
 # Skip Conditions - No applies on Wed/Fri; no apply if no new resources
-
 # Plan and Apply Logic - only apply if new resources exist. Only apply to stg/prod if dev had a successful apply on the same commit ## CHECK REUSABLE TEMPLATES ##
-
 # Apply Tracking - Compare SHA to determine the apply ## GREATEST CHALLENGE OF THE WORKFLOW. CAPURING LAST APPLY, SHA STORAGE, AND COMPARISON ##
-
 # Reusable Workflow - Will be making use of reusable-terraform.yml ## REVIEW AND ADD CUSTOM LOGIC AROUND IT OR USE ACTIONS IN THE JOB ##
-
 # Notifications - Sent to Google Chat on success and failure — only if apply runs ## CHECK REUSABLE TEMPLATES ##
-
 # Runners - Using Self-hosted runners  ## CONFIRM RUNNERS ##
-
-
 # ************************************************************************************
 
-#CURRENT STATE OF THE WORKFLOW
+# CURRENT STATE OF THE WORKFLOW
+# My first commit was generic for a pr review to understand our configurations. Reviewing reusable workflow for adjustments
+# https://github.com/wexinc/ps-ds-peng-tools/blob/reusable-bot/1.7.0/.github/workflows/reusable-terraform.yml
 
-# My first commit was generic for a pr review to understand our configurations. Reviewing reusable workflow for adjustments - https://github.com/wexinc/ps-ds-peng-tools/blob/reusable-bot/1.7.0/.github/workflows/reusable-terraform.ymlConnect your Github account 
+# We have 2 options: Either make use of actions from reusable workflow or add logic around the reusable workflow.
+# Making use of actions in the reusable workflow seems ideal but would add the complexity of the configuration since we are doing a conditional apply based on SHA comparison, on schedule which has more custom logic than the reusable workflow.
 
-# We have 2 options: Either make use of actions from  reusable workflow or add logic around the reusable workflow.
-
-# Making use of actions in the reusable workflow seem ideal but would add the complexity of the configuration since we are doing a  conditional apply based on SHA comparison, on schedule which has more custom logic than the reusable workflow.
-
-# Building a hybrid workflow that wraps our existing reusable-terraform.yml and add the pre-check logic for SHA diff to skip unnecessary applies and post-apply logic  to store successful SHA make the configuration cleaner and less complex.
+# Building a hybrid workflow that wraps our existing reusable-terraform.yml and adds the pre-check logic for SHA diff to skip unnecessary applies and post-apply logic to store the successful SHA makes the configuration cleaner and less complex.
 
 # *************************************************************************************
 
-## This workflow is a hybrid of the reusable workflow and custom logic to check for changes in the pantomath module before applying Terraform changes. It also includes a step to store the last successful SHA in S3 for tracking purposes.
+# This workflow is a hybrid of the reusable workflow and custom logic to check for changes in the pantomath module before applying Terraform changes. It also includes a step to store the last successful SHA in S3 for tracking purposes.
 
 #****************************************
-                 # TRIGGERS
+# TRIGGERS
 #*****************************************
 
 name: "[AUTO] Add Grants To Pantomath"
@@ -55,7 +45,7 @@ on:
       - 'snowflake/snowflake_pantomath/**'
 
 #****************************************
-     # CHECK IF APPLY NEEDED            
+# CHECK IF APPLY NEEDED            
 #*****************************************
 
 jobs:
@@ -141,18 +131,18 @@ jobs:
           fi
 
 #****************************************
-     # RUN THE APPLY IF NEEDED            
+# RUN THE APPLY IF NEEDED            
 #*****************************************
 
   terraform-apply:
     name: "Run Terraform Apply via Reusable"
     needs: check-if-apply-needed
-    if: (needs.check-if-apply-needed.outputs.should_apply || 'false') == 'true'
+    if: needs.check-if-apply-needed.outputs.should_apply == 'true'
     uses: Muhammad-Awab/automation-tf/.github/workflows/reusable_workflow.yml@main
+    with:
       ENVIRONMENT_NAME: ${{ needs.check-if-apply-needed.outputs.env_name }}
       REGION: us-west-2
       BUCKET: ${{ needs.check-if-apply-needed.outputs.bucket_name }}
-    with:
       module: snowflake/snowflake_pantomath
       region: ${{ env.REGION }}
       command: apply
@@ -169,7 +159,7 @@ jobs:
       DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
 
 #****************************************
-#      POST-APPLY LOGIC            
+# POST-APPLY LOGIC            
 #*****************************************
 
   post-apply:
@@ -182,7 +172,3 @@ jobs:
         run: |
           echo "${{ github.sha }}" > last_sha.txt
           aws s3 cp last_sha.txt s3://${{ needs.check-if-apply-needed.outputs.bucket_name }}/last_successful_sha
-
-#************************************************************************************************
-
-
