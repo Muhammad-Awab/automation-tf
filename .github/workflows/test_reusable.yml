@@ -141,17 +141,14 @@ jobs:
     uses: Muhammad-Awab/automation-tf/.github/workflows/reusable_workflow.yml@main
     with:
       ENVIRONMENT_NAME: ${{ needs.check-if-apply-needed.outputs.env_name }}
-      REGION: us-west-2
       BUCKET: ${{ needs.check-if-apply-needed.outputs.bucket_name }}
       module: snowflake/snowflake_pantomath
-      region: ${{ env.REGION }}
       command: apply
-      environment: ${{ env.ENVIRONMENT_NAME }}
+      environment: ${{ needs.check-if-apply-needed.outputs.env_name }}
       target: ""
       refresh: true
       disconnected: false
       is_pull_request: false
-      bucket: ${{ env.BUCKET }}
       project_type: corporate
     secrets:
       GHT: ${{ secrets.GHT }}
