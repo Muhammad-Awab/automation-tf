@@ -1,0 +1,29 @@
+name: Test Reusable Workflow
+on:
+  workflow_dispatch:  # This enables manual triggering
+    inputs:
+      module:
+        description: "Module to test"
+        required: true
+        type: string
+      environment:
+        description: "Environment (DEV/TEST/PROD)"
+        required: true
+        type: string
+        default: "DEV"
+
+jobs:
+  call-reusable:
+    uses: ./.github/workflows/reusable_workflow.yml  # Points to your existing file
+    with:
+      module: ${{ inputs.module }}
+      environment: ${{ inputs.environment }}
+      region: "us-west-2"
+      command: "plan"  # Start with 'plan' for safety
+      target: ""
+      refresh: true
+      disconnected: false
+      is_pull_request: false
+      bucket: "your-log-bucket-name"  # Replace with actual bucket
+      project_type: "corporate"
+    secrets: inherit  # Automatically passes all secrets
